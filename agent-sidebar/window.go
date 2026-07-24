@@ -72,7 +72,7 @@ func (collector *windowCollector) refresh(ctx context.Context) ([]codexSession, 
 		return nil, fmt.Errorf("decode WezTerm panes: %w", err)
 	}
 
-	windowID, found := sidebarWindowID(panes, collector.options.SidebarPaneID)
+	windowID, sidebarTabID, found := sidebarLocation(panes, collector.options.SidebarPaneID)
 	if !found {
 		return nil, fmt.Errorf("sidebar pane %d is not present in WezTerm", collector.options.SidebarPaneID)
 	}
@@ -135,12 +135,29 @@ func (collector *windowCollector) refresh(ctx context.Context) ([]codexSession, 
 	for index, pane := range codexPanes {
 		cwd := fileURIPath(pane.CWD)
 		sessions = append(sessions, codexSession{
-			Repository: repositoryName(cwd),
-			Tab:        fmt.Sprintf("tab %d", tabPositions[pane.TabID]),
-			Summary:    summaries[index],
+			PaneID:      pane.PaneID,
+			TabPosition: tabPositions[pane.TabID],
+			IsCurrent:   pane.TabID == sidebarTabID,
+			Repository:  repositoryName(cwd),
+			Summary:     summaries[index],
 		})
 	}
 	return sessions, errors.Join(readErrors...)
+}
+
+func (collector *windowCollector) activatePane(ctx context.Context, paneID int) error {
+	_, err := collector.execute(
+		ctx,
+		collector.options.WezTerm,
+		"cli",
+		"activate-pane",
+		"--pane-id",
+		strconv.Itoa(paneID),
+	)
+	if err != nil {
+		return fmt.Errorf("activate pane %d: %w", paneID, err)
+	}
+	return nil
 }
 
 func windowTabPositions(panes []paneSnapshot, windowID int) map[int]int {
@@ -156,13 +173,13 @@ func windowTabPositions(panes []paneSnapshot, windowID int) map[int]int {
 	return positions
 }
 
-func sidebarWindowID(panes []paneSnapshot, sidebarPaneID int) (int, bool) {
+func sidebarLocation(panes []paneSnapshot, sidebarPaneID int) (windowID, tabID int, found bool) {
 	for _, pane := range panes {
 		if pane.PaneID == sidebarPaneID {
-			return pane.WindowID, true
+			return pane.WindowID, pane.TabID, true
 		}
 	}
-	return 0, false
+	return 0, 0, false
 }
 
 func codexTerminalSet(processList string) map[string]struct{} {

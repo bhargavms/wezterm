@@ -24,7 +24,7 @@ func TestWindowSidebarShowsTopLevelCodexPanesInCurrentWindow(t *testing.T) {
 			return []byte(`[
 				{"window_id":7,"tab_id":11,"pane_id":1,"title":"alpha","tab_title":"","cwd":"file://host/work/alpha","tty_name":"/dev/ttys001"},
 				{"window_id":7,"tab_id":12,"pane_id":2,"title":"shell","tab_title":"","cwd":"file://host/work/shell","tty_name":"/dev/ttys002"},
-				{"window_id":7,"tab_id":13,"pane_id":99,"title":"Agents","tab_title":"","cwd":"file://host/work/alpha","tty_name":"/dev/ttys099"},
+				{"window_id":7,"tab_id":11,"pane_id":99,"title":"Agents","tab_title":"","cwd":"file://host/work/alpha","tty_name":"/dev/ttys099"},
 				{"window_id":8,"tab_id":21,"pane_id":3,"title":"other","tab_title":"","cwd":"file://host/work/other","tty_name":"/dev/ttys003"}
 			]`), nil
 		case "ps -axo tty=,comm=,args=":
@@ -56,6 +56,9 @@ func TestWindowSidebarShowsTopLevelCodexPanesInCurrentWindow(t *testing.T) {
 	sessions, err := collector.refresh(context.Background())
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].PaneID != 1 || sessions[0].TabPosition != 1 || !sessions[0].IsCurrent {
+		t.Fatalf("session identity = %#v", sessions)
 	}
 	output := renderSidebar(sessions, renderOptions{
 		Scope: "this window",
@@ -159,5 +162,24 @@ func TestWindowCollectorBoundsExternalCommands(t *testing.T) {
 	}
 	if elapsed := time.Since(started); elapsed > time.Second {
 		t.Fatalf("refresh took %s despite command timeout", elapsed)
+	}
+}
+
+func TestWindowCollectorActivatesCodexPane(t *testing.T) {
+	var command string
+	execute := func(_ context.Context, name string, arguments ...string) ([]byte, error) {
+		command = name + " " + strings.Join(arguments, " ")
+		return nil, nil
+	}
+	collector := newWindowCollector(windowCollectorOptions{
+		Execute: execute,
+		WezTerm: "wezterm",
+	})
+
+	if err := collector.activatePane(context.Background(), 42); err != nil {
+		t.Fatal(err)
+	}
+	if want := "wezterm cli activate-pane --pane-id 42"; command != want {
+		t.Fatalf("activation command = %q, want %q", command, want)
 	}
 }

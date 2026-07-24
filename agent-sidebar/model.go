@@ -6,9 +6,11 @@ import (
 )
 
 type codexSession struct {
-	Repository string
-	Tab        string
-	Summary    string
+	PaneID      int
+	TabPosition int
+	IsCurrent   bool
+	Repository  string
+	Summary     string
 }
 
 func sanitizeLabel(value string) string {

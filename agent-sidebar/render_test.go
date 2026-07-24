@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -10,22 +11,25 @@ import (
 func TestRenderSidebarShowsSessionsAndNoANSIInPlainMode(t *testing.T) {
 	output := renderSidebar([]codexSession{
 		{
-			Repository: "review-authentication",
-			Tab:        "tab 3",
-			Summary:    "Tracing the authentication boundary and its focused unit tests",
+			PaneID:      42,
+			TabPosition: 3,
+			Repository:  "review-authentication",
+			Summary:     "Tracing the authentication boundary and its focused unit tests",
 		},
 	}, renderOptions{
-		Scope: "this window",
-		Width: 36,
-		Plain: true,
+		Scope:          "this window",
+		Width:          36,
+		Plain:          true,
+		SelectedPaneID: 42,
 	})
 
 	for _, expected := range []string{
 		"AGENTS · this window",
 		"1 active",
-		"● tab 3 · review-authentication",
+		"› tab 3 · review-authentication",
 		"Tracing the authentication",
-		"q close   r refresh",
+		"j/k move · enter switch",
+		"1-9 jump · q close",
 	} {
 		if !strings.Contains(output, expected) {
 			t.Errorf("output does not contain %q:\n%s", expected, output)
@@ -44,9 +48,9 @@ func TestRenderSidebarShowsSessionsAndNoANSIInPlainMode(t *testing.T) {
 
 func TestRenderSidebarRespectsTerminalCellWidth(t *testing.T) {
 	output := renderSidebar([]codexSession{{
-		Repository: "設計レビュー 🧭",
-		Tab:        "tab 8",
-		Summary:    "認証フローを確認しています 🚀",
+		TabPosition: 8,
+		Repository:  "設計レビュー 🧭",
+		Summary:     "認証フローを確認しています 🚀",
 	}}, renderOptions{
 		Scope: "this window",
 		Width: 24,
@@ -62,9 +66,9 @@ func TestRenderSidebarRespectsTerminalCellWidth(t *testing.T) {
 
 func TestRenderSidebarStripsControlSequencesFromLabels(t *testing.T) {
 	output := renderSidebar([]codexSession{{
-		Repository: "review\x1b]2;owned\a",
-		Tab:        "tab 1\x1b[31m",
-		Summary:    "Safe summary",
+		TabPosition: 1,
+		Repository:  "review\x1b]2;owned\a",
+		Summary:     "Safe summary",
 	}}, renderOptions{
 		Scope: "this window\x1b]2;owned\a",
 		Width: 42,
@@ -98,9 +102,9 @@ func TestRenderSidebarExplainsEmptyStateAndErrors(t *testing.T) {
 
 func TestRenderSidebarKeepsTabVisibleForLongRepositoryNames(t *testing.T) {
 	output := renderSidebar([]codexSession{{
-		Repository: "growthbook-experiment-tracker",
-		Tab:        "tab 12",
-		Summary:    "Reviewing the rollout",
+		TabPosition: 12,
+		Repository:  "growthbook-experiment-tracker",
+		Summary:     "Reviewing the rollout",
 	}}, renderOptions{
 		Scope: "this window",
 		Width: 30,
@@ -110,6 +114,90 @@ func TestRenderSidebarKeepsTabVisibleForLongRepositoryNames(t *testing.T) {
 	if !strings.Contains(output, "● tab 12 · growthbook") {
 		t.Fatalf("tab position or repository prefix disappeared:\n%s", output)
 	}
+}
+
+func TestRenderSidebarFitsViewportAndKeepsSelectedTabVisible(t *testing.T) {
+	sessions := make([]codexSession, 0, 9)
+	for tab := 1; tab <= 9; tab++ {
+		sessions = append(sessions, codexSession{
+			PaneID:      tab,
+			TabPosition: tab,
+			Repository:  fmt.Sprintf("repository-%d", tab),
+			Summary:     "This intentionally long activity summary wraps onto a second terminal line",
+		})
+	}
+
+	output := renderSidebar(sessions, renderOptions{
+		Scope:          "this window",
+		Width:          40,
+		Height:         37,
+		Plain:          true,
+		SelectedPaneID: 1,
+	})
+
+	if rows := renderedRows(output); rows > 37 {
+		t.Fatalf("rendered %d rows into a 37-row viewport:\n%s", rows, output)
+	}
+	for _, expected := range []string{"AGENTS · this window", "› tab 1 · repository-1", "↓ 2 more"} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("output does not contain %q:\n%s", expected, output)
+		}
+	}
+
+	output = renderSidebar(sessions, renderOptions{
+		Scope:          "this window",
+		Width:          40,
+		Height:         37,
+		Plain:          true,
+		SelectedPaneID: 9,
+	})
+	for _, expected := range []string{"↑ 2 more", "› tab 9 · repository-9"} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("output does not contain %q with the last tab selected:\n%s", expected, output)
+		}
+	}
+
+	for _, height := range []int{24, 8} {
+		output = renderSidebar(sessions, renderOptions{
+			Scope:          "this window",
+			Width:          40,
+			Height:         height,
+			Plain:          true,
+			SelectedPaneID: 5,
+		})
+		if rows := renderedRows(output); rows > height {
+			t.Fatalf("rendered %d rows into a %d-row viewport:\n%s", rows, height, output)
+		}
+		for _, expected := range []string{"AGENTS · this window", "› tab 5 · repository-5"} {
+			if !strings.Contains(output, expected) {
+				t.Fatalf("%d-row output does not contain %q:\n%s", height, expected, output)
+			}
+		}
+	}
+
+	output = renderSidebar(sessions, renderOptions{
+		Scope:          "this window",
+		Width:          40,
+		Height:         13,
+		Plain:          true,
+		SelectedPaneID: 5,
+		Err:            errTest("pane refresh failed"),
+	})
+	if rows := renderedRows(output); rows > 13 {
+		t.Fatalf("rendered %d rows into a 13-row viewport with an error:\n%s", rows, output)
+	}
+	for _, expected := range []string{"AGENTS · this window", "› tab 5 · repository-5"} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("13-row error output does not contain %q:\n%s", expected, output)
+		}
+	}
+}
+
+func renderedRows(output string) int {
+	if output == "" {
+		return 0
+	}
+	return strings.Count(output, "\n") + 1
 }
 
 type errTest string

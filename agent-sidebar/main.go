@@ -14,6 +14,8 @@ import (
 	"time"
 )
 
+const escapeSequenceTimeout = 100 * time.Millisecond
+
 type appConfig struct {
 	wezterm      string
 	paneID       int
@@ -43,11 +45,14 @@ func main() {
 
 	if config.once {
 		sessions, refreshErr := collector.refresh(context.Background())
+		picker := sidebarPicker{}
+		picker.updateSessions(sessions)
 		fmt.Print(renderSidebar(sessions, renderOptions{
-			Scope: "this window",
-			Width: config.width,
-			Plain: config.plain,
-			Err:   refreshErr,
+			Scope:          "this window",
+			Width:          config.width,
+			Plain:          config.plain,
+			Err:            refreshErr,
+			SelectedPaneID: picker.selectedPaneID(),
 		}))
 		if refreshErr != nil {
 			os.Exit(1)
@@ -153,6 +158,37 @@ func runInteractive(config appConfig, collector *windowCollector) {
 	input := make(chan byte, 1)
 	go readInput(input)
 
+	height, width := terminalSize(config.width)
+	picker := sidebarPicker{}
+	var lastErr error
+	var escapeTimer *time.Timer
+	var escapeTimeout <-chan time.Time
+	defer func() {
+		if escapeTimer != nil {
+			escapeTimer.Stop()
+		}
+	}()
+	updateEscapeTimeout := func() {
+		if escapeTimer != nil {
+			escapeTimer.Stop()
+		}
+		escapeTimeout = nil
+		if picker.escapePending() {
+			escapeTimer = time.NewTimer(escapeSequenceTimeout)
+			escapeTimeout = escapeTimer.C
+		}
+	}
+	redraw := func() {
+		output := renderSidebar(picker.sessions, renderOptions{
+			Scope:          "this window",
+			Width:          width,
+			Height:         height,
+			Err:            lastErr,
+			SelectedPaneID: picker.selectedPaneID(),
+		})
+		fmt.Print("\x1b[H\x1b[2J" + output)
+	}
+
 	results := make(chan refreshResult, 1)
 	refreshing := false
 	requestRefresh := func() {
@@ -169,10 +205,26 @@ func runInteractive(config appConfig, collector *windowCollector) {
 		}()
 	}
 	requestRefresh()
+
+	activationResults := make(chan error, 1)
+	activating := false
+	requestActivation := func(paneID int) {
+		if activating {
+			return
+		}
+		activating = true
+		go func() {
+			err := collector.activatePane(ctx, paneID)
+			select {
+			case activationResults <- err:
+			case <-ctx.Done():
+			}
+		}()
+	}
+
 	ticker := time.NewTicker(config.refreshEvery)
 	defer ticker.Stop()
 
-	width := terminalWidth(config.width)
 	resize := make(chan os.Signal, 1)
 	signal.Notify(resize, syscall.SIGWINCH)
 	defer signal.Stop(resize)
@@ -182,25 +234,42 @@ func runInteractive(config appConfig, collector *windowCollector) {
 		case <-ctx.Done():
 			return
 		case key := <-input:
-			switch key {
-			case 'q', 3, 27:
+			result := picker.handleByte(key)
+			updateEscapeTimeout()
+			switch result.command {
+			case pickerClose:
 				return
-			case 'r':
+			case pickerRefresh:
 				requestRefresh()
+			case pickerRedraw:
+				redraw()
+			case pickerActivate:
+				requestActivation(result.paneID)
+			}
+		case <-escapeTimeout:
+			escapeTimeout = nil
+			escapeTimer = nil
+			if result := picker.expireEscape(); result.command == pickerClose {
+				return
 			}
 		case <-ticker.C:
 			requestRefresh()
 		case <-resize:
-			width = terminalWidth(config.width)
+			height, width = terminalSize(config.width)
+			redraw()
 			requestRefresh()
 		case result := <-results:
 			refreshing = false
-			output := renderSidebar(result.sessions, renderOptions{
-				Scope: "this window",
-				Width: width,
-				Err:   result.err,
-			})
-			fmt.Print("\x1b[H\x1b[2J" + output)
+			picker.updateSessions(result.sessions)
+			lastErr = result.err
+			redraw()
+		case err := <-activationResults:
+			activating = false
+			if err == nil {
+				return
+			}
+			lastErr = err
+			redraw()
 		}
 	}
 }
@@ -227,19 +296,19 @@ func enterCharacterMode() func() {
 	}
 }
 
-func terminalWidth(fallback int) int {
+func terminalSize(fallbackWidth int) (int, int) {
 	command := exec.Command("/bin/stty", "size")
 	command.Stdin = os.Stdin
 	output, err := command.Output()
 	if err != nil {
-		return max(20, fallback)
+		return 24, max(20, fallbackWidth)
 	}
 
 	var rows, columns int
-	if _, err := fmt.Sscanf(string(output), "%d %d", &rows, &columns); err != nil || columns <= 0 {
-		return max(20, fallback)
+	if _, err := fmt.Sscanf(string(output), "%d %d", &rows, &columns); err != nil || rows <= 0 || columns <= 0 {
+		return 24, max(20, fallbackWidth)
 	}
-	return max(20, columns)
+	return rows, max(20, columns)
 }
 
 func readInput(output chan<- byte) {
