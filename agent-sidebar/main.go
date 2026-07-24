@@ -17,12 +17,13 @@ import (
 const escapeSequenceTimeout = 100 * time.Millisecond
 
 type appConfig struct {
-	wezterm      string
-	paneID       int
-	width        int
-	refreshEvery time.Duration
-	once         bool
-	plain        bool
+	wezterm        string
+	targetWindowID int
+	sourcePaneID   int
+	width          int
+	refreshEvery   time.Duration
+	once           bool
+	plain          bool
 }
 
 type refreshResult struct {
@@ -38,9 +39,10 @@ func main() {
 	}
 
 	collector := newWindowCollector(windowCollectorOptions{
-		Execute:       executeCommand,
-		WezTerm:       config.wezterm,
-		SidebarPaneID: config.paneID,
+		Execute:        executeCommand,
+		WezTerm:        config.wezterm,
+		TargetWindowID: config.targetWindowID,
+		SourcePaneID:   config.sourcePaneID,
 	})
 
 	if config.once {
@@ -65,13 +67,14 @@ func main() {
 
 func parseFlags() (appConfig, error) {
 	var config appConfig
-	defaultPaneID, err := environmentPaneID()
+	defaultSourcePaneID, err := environmentPaneID()
 	if err != nil {
 		return config, err
 	}
 
 	flag.StringVar(&config.wezterm, "wezterm", weztermExecutable(), "WezTerm CLI executable")
-	flag.IntVar(&config.paneID, "pane-id", defaultPaneID, "sidebar pane id used to select the current window")
+	flag.IntVar(&config.targetWindowID, "window-id", -1, "WezTerm window containing the agent tabs")
+	flag.IntVar(&config.sourcePaneID, "source-pane-id", defaultSourcePaneID, "pane that opened the sidebar")
 	flag.IntVar(&config.width, "width", 42, "render width in terminal cells")
 	flag.DurationVar(&config.refreshEvery, "refresh", 2*time.Second, "window refresh interval")
 	flag.BoolVar(&config.once, "once", false, "render once and exit")
@@ -265,10 +268,10 @@ func runInteractive(config appConfig, collector *windowCollector) {
 			redraw()
 		case err := <-activationResults:
 			activating = false
-			if err == nil {
-				return
-			}
 			lastErr = err
+			if err == nil {
+				requestRefresh()
+			}
 			redraw()
 		}
 	}

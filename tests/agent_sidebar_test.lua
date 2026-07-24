@@ -1,9 +1,12 @@
 local callbacks = {}
+local mux_windows = {}
+local spawn_window_calls = {}
+local spawn_window_result
+local active_screen = { x = 100, y = 50, width = 2000, height = 1200 }
 
-local action = {}
-function action.CloseCurrentPane(options)
-  return { kind = 'close', confirm = options.confirm }
-end
+local action = {
+  ToggleAlwaysOnTop = { kind = 'always-on-top' },
+}
 
 package.preload.wezterm = function()
   return {
@@ -12,6 +15,28 @@ package.preload.wezterm = function()
       table.insert(callbacks, callback)
       return callback
     end,
+    mux = {
+      all_windows = function()
+        return mux_windows
+      end,
+      spawn_window = function(spec)
+        table.insert(spawn_window_calls, spec)
+        mux_windows = { spawn_window_result[3] }
+        return table.unpack(spawn_window_result)
+      end,
+    },
+    gui = {
+      screens = function()
+        return {
+          active = active_screen,
+        }
+      end,
+    },
+    time = {
+      call_after = function(_, callback)
+        callback()
+      end,
+    },
     home_dir = '/Users/test',
     log_error = function(message)
       error(message)
@@ -49,77 +74,142 @@ local toggle = agent_sidebar.toggle_action {
 }
 
 do
-  local sidebar = {}
-  function sidebar:get_user_vars()
+  local closed = false
+  local existing_sidebar = {}
+  function existing_sidebar:get_user_vars()
     return { CODEX_AGENT_SIDEBAR = '1' }
   end
-
-  local tab = {}
-  function tab:panes_with_info()
-    return { { pane = sidebar } }
+  function existing_sidebar:send_text(value)
+    if value == 'q' then
+      closed = true
+      mux_windows = {}
+    end
   end
 
-  local pane = {}
-  function pane:tab()
-    return tab
+  local existing_tab = {}
+  function existing_tab:panes_with_info()
+    return { { pane = existing_sidebar } }
   end
 
-  local window = make_window()
-  toggle(window, pane)
+  local existing_window = {}
+  function existing_window:tabs()
+    return { existing_tab }
+  end
+  mux_windows = { existing_window }
 
-  assert_equal(#window.calls, 1, 'close action count')
-  assert_equal(window.calls[1].action.kind, 'close', 'close action kind')
-  assert_equal(window.calls[1].action.confirm, false, 'close confirmation')
-  assert_equal(window.calls[1].target, sidebar, 'closed pane')
+  local spawned_sidebar = {}
+  function spawned_sidebar:inject_output() end
+  function spawned_sidebar:activate() end
+
+  local source_tab = {}
+  function source_tab:panes_with_info()
+    return {}
+  end
+  function source_tab:get_size()
+    return { cols = 120 }
+  end
+
+  local source_pane = {}
+  function source_pane:tab()
+    return source_tab
+  end
+  function source_pane:split()
+    return spawned_sidebar
+  end
+
+  toggle(make_window(), source_pane)
+
+  assert_equal(closed, true, 'existing global sidebar closed')
+  assert_equal(#mux_windows, 0, 'global sidebar count after close')
+  assert_equal(#spawn_window_calls, 0, 'new sidebar window count')
 end
 
 do
+  active_screen = { x = 100, y = 50, width = 400, height = 360 }
   local injected
-  local original_activated = false
-  local sidebar_activated = false
-  local split_spec
+  local sidebar_title
+  local overrides
+  local inner_size
+  local position
+  local focused = false
+  local gui_actions = {}
 
   local sidebar = {}
   function sidebar:inject_output(value)
     injected = value
   end
-  function sidebar:activate()
-    sidebar_activated = true
+  function sidebar:pane_id()
+    return 900
   end
 
-  local tab = {}
-  function tab:panes_with_info()
-    return {}
+  local sidebar_tab = {}
+
+  local sidebar_gui = {}
+  function sidebar_gui:set_config_overrides(value)
+    overrides = value
   end
-  function tab:get_size()
-    return { cols = 120 }
+  function sidebar_gui:set_inner_size(width, height)
+    inner_size = { width = width, height = height }
+  end
+  function sidebar_gui:set_position(x, y)
+    position = { x = x, y = y }
+  end
+  function sidebar_gui:perform_action(requested_action, target)
+    table.insert(gui_actions, { action = requested_action, target = target })
+  end
+  function sidebar_gui:focus()
+    focused = true
+  end
+
+  local sidebar_window = {}
+  function sidebar_window:set_title(value)
+    sidebar_title = value
+  end
+  function sidebar_window:gui_window()
+    return sidebar_gui
+  end
+
+  spawn_window_result = { sidebar_tab, sidebar, sidebar_window }
+
+  local source_mux_window = {}
+  function source_mux_window:window_id()
+    return 7
   end
 
   local pane = {}
-  function pane:tab()
-    return tab
+  function pane:pane_id()
+    return 41
   end
-  function pane:split(spec)
-    split_spec = spec
-    return sidebar
-  end
-  function pane:activate()
-    original_activated = true
+  function pane:get_dimensions()
+    return { viewport_rows = 37 }
   end
 
-  toggle(make_window(), pane)
+  local window = make_window()
+  function window:mux_window()
+    return source_mux_window
+  end
 
-  assert_equal(split_spec.direction, 'Right', 'split direction')
-  assert_equal(split_spec.top_level, true, 'top-level split')
-  assert_equal(split_spec.size, 36, 'split width')
-  assert_equal(split_spec.cwd, '/tmp/project', 'split cwd')
-  assert_equal(split_spec.args[1], runner, 'runner command')
-  assert_equal(split_spec.args[2], '--width', 'width flag')
-  assert_equal(split_spec.args[3], '34', 'width argument')
+  toggle(window, pane)
+
+  assert_equal(#spawn_window_calls, 1, 'floating sidebar spawn count')
+  local spawn = spawn_window_calls[1]
+  assert_equal(spawn.cwd, '/tmp/project', 'floating sidebar cwd')
+  assert_equal(spawn.args[1], runner, 'runner command')
+  assert_equal(spawn.args[2], '--window-id', 'window id flag')
+  assert_equal(spawn.args[3], '7', 'window id')
+  assert_equal(spawn.args[4], '--source-pane-id', 'source pane flag')
+  assert_equal(spawn.args[5], '41', 'source pane id')
+  assert_equal(sidebar_title, 'Codex Agent Sidebar', 'sidebar mux window title')
+  assert_equal(overrides.enable_tab_bar, false, 'sidebar tab bar')
+  assert_equal(overrides.window_decorations, 'RESIZE', 'sidebar decorations')
+  assert_equal(inner_size.width, 352, 'sidebar width stays inside a small screen')
+  assert_equal(inner_size.height, 280, 'sidebar height stays inside a small screen')
+  assert_equal(position.x, 124, 'sidebar is positioned on the right')
+  assert_equal(position.y, 90, 'sidebar top margin')
+  assert_equal(gui_actions[1].action.kind, 'always-on-top', 'floating window level')
+  assert_equal(gui_actions[1].target, sidebar, 'floating action pane')
   assert(injected:find('CODEX_AGENT_SIDEBAR', 1, true), 'sidebar marker was not injected')
-  assert(injected:find('Agents', 1, true), 'sidebar title was not injected')
-  assert_equal(sidebar_activated, true, 'sidebar pane activation')
-  assert_equal(original_activated, false, 'original pane activation')
+  assert_equal(focused, true, 'floating sidebar focus')
 end
 
 print 'agent_sidebar_test: ok'

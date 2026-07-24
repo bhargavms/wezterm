@@ -24,8 +24,8 @@ func TestWindowSidebarShowsTopLevelCodexPanesInCurrentWindow(t *testing.T) {
 			return []byte(`[
 				{"window_id":7,"tab_id":11,"pane_id":1,"title":"alpha","tab_title":"","cwd":"file://host/work/alpha","tty_name":"/dev/ttys001"},
 				{"window_id":7,"tab_id":12,"pane_id":2,"title":"shell","tab_title":"","cwd":"file://host/work/shell","tty_name":"/dev/ttys002"},
-				{"window_id":7,"tab_id":11,"pane_id":99,"title":"Agents","tab_title":"","cwd":"file://host/work/alpha","tty_name":"/dev/ttys099"},
-				{"window_id":8,"tab_id":21,"pane_id":3,"title":"other","tab_title":"","cwd":"file://host/work/other","tty_name":"/dev/ttys003"}
+				{"window_id":8,"tab_id":21,"pane_id":3,"title":"other","tab_title":"","cwd":"file://host/work/other","tty_name":"/dev/ttys003"},
+				{"window_id":99,"tab_id":91,"pane_id":900,"title":"Agents","tab_title":"","cwd":"file://host/work/alpha","tty_name":"/dev/ttys099"}
 			]`), nil
 		case "ps -axo tty=,comm=,args=":
 			return []byte(strings.Join([]string{
@@ -49,9 +49,10 @@ func TestWindowSidebarShowsTopLevelCodexPanesInCurrentWindow(t *testing.T) {
 	}
 
 	collector := newWindowCollector(windowCollectorOptions{
-		Execute:       execute,
-		WezTerm:       "wezterm",
-		SidebarPaneID: 99,
+		Execute:        execute,
+		WezTerm:        "wezterm",
+		TargetWindowID: 7,
+		SourcePaneID:   1,
 	})
 	sessions, err := collector.refresh(context.Background())
 	if err != nil {
@@ -118,7 +119,7 @@ func TestWindowCollectorSurfacesPaneTextFailures(t *testing.T) {
 		case "wezterm cli list --format json":
 			return []byte(`[
 				{"window_id":7,"tab_id":11,"pane_id":1,"cwd":"file://host/work/alpha","tty_name":"/dev/ttys001"},
-				{"window_id":7,"tab_id":12,"pane_id":99,"cwd":"file://host/work/alpha","tty_name":"/dev/ttys099"}
+				{"window_id":99,"tab_id":91,"pane_id":900,"cwd":"file://host/work/alpha","tty_name":"/dev/ttys099"}
 			]`), nil
 		case "ps -axo tty=,comm=,args=":
 			return []byte("ttys001 codex codex"), nil
@@ -130,9 +131,10 @@ func TestWindowCollectorSurfacesPaneTextFailures(t *testing.T) {
 	}
 
 	collector := newWindowCollector(windowCollectorOptions{
-		Execute:       execute,
-		WezTerm:       "wezterm",
-		SidebarPaneID: 99,
+		Execute:        execute,
+		WezTerm:        "wezterm",
+		TargetWindowID: 7,
+		SourcePaneID:   1,
 	})
 	sessions, err := collector.refresh(context.Background())
 	if len(sessions) != 1 || sessions[0].Summary != "Codex is running" {
@@ -151,7 +153,8 @@ func TestWindowCollectorBoundsExternalCommands(t *testing.T) {
 	collector := newWindowCollector(windowCollectorOptions{
 		Execute:        execute,
 		WezTerm:        "wezterm",
-		SidebarPaneID:  99,
+		TargetWindowID: 7,
+		SourcePaneID:   1,
 		CommandTimeout: 10 * time.Millisecond,
 	})
 

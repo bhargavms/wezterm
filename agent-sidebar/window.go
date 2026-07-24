@@ -25,7 +25,8 @@ type commandExecutor func(context.Context, string, ...string) ([]byte, error)
 type windowCollectorOptions struct {
 	Execute        commandExecutor
 	WezTerm        string
-	SidebarPaneID  int
+	TargetWindowID int
+	SourcePaneID   int
 	CommandTimeout time.Duration
 }
 
@@ -72,9 +73,13 @@ func (collector *windowCollector) refresh(ctx context.Context) ([]codexSession, 
 		return nil, fmt.Errorf("decode WezTerm panes: %w", err)
 	}
 
-	windowID, sidebarTabID, found := sidebarLocation(panes, collector.options.SidebarPaneID)
+	windowID, found := resolveTargetWindow(panes, collector.options.TargetWindowID, collector.options.SourcePaneID)
 	if !found {
-		return nil, fmt.Errorf("sidebar pane %d is not present in WezTerm", collector.options.SidebarPaneID)
+		return nil, fmt.Errorf(
+			"target window %d for source pane %d is not present in WezTerm",
+			collector.options.TargetWindowID,
+			collector.options.SourcePaneID,
+		)
 	}
 
 	processes, err := collector.execute(ctx, "ps", "-axo", "tty=,comm=,args=")
@@ -86,7 +91,7 @@ func (collector *windowCollector) refresh(ctx context.Context) ([]codexSession, 
 	tabPositions := windowTabPositions(panes, windowID)
 	codexPanes := make([]paneSnapshot, 0)
 	for _, pane := range panes {
-		if pane.WindowID != windowID || pane.PaneID == collector.options.SidebarPaneID {
+		if pane.WindowID != windowID {
 			continue
 		}
 		if _, running := codexTTYs[normalizeTTY(pane.TTYName)]; !running {
@@ -137,7 +142,7 @@ func (collector *windowCollector) refresh(ctx context.Context) ([]codexSession, 
 		sessions = append(sessions, codexSession{
 			PaneID:      pane.PaneID,
 			TabPosition: tabPositions[pane.TabID],
-			IsCurrent:   pane.TabID == sidebarTabID,
+			IsCurrent:   pane.PaneID == collector.options.SourcePaneID,
 			Repository:  repositoryName(cwd),
 			Summary:     summaries[index],
 		})
@@ -173,13 +178,22 @@ func windowTabPositions(panes []paneSnapshot, windowID int) map[int]int {
 	return positions
 }
 
-func sidebarLocation(panes []paneSnapshot, sidebarPaneID int) (windowID, tabID int, found bool) {
+func resolveTargetWindow(panes []paneSnapshot, targetWindowID, sourcePaneID int) (windowID int, found bool) {
+	if targetWindowID >= 0 {
+		for _, pane := range panes {
+			if pane.WindowID == targetWindowID {
+				return targetWindowID, true
+			}
+		}
+		return 0, false
+	}
+
 	for _, pane := range panes {
-		if pane.PaneID == sidebarPaneID {
-			return pane.WindowID, pane.TabID, true
+		if pane.PaneID == sourcePaneID {
+			return pane.WindowID, true
 		}
 	}
-	return 0, 0, false
+	return 0, false
 }
 
 func codexTerminalSet(processList string) map[string]struct{} {
