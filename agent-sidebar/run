@@ -1,0 +1,37 @@
+#!/bin/zsh
+
+set -eu
+
+script_dir=${0:A:h}
+cache_dir=${XDG_CACHE_HOME:-${HOME}/.cache}/wezterm-agent-sidebar
+binary=${cache_dir}/codex-agent-sidebar
+
+needs_build=false
+if [[ ! -x "${binary}" ]]; then
+  needs_build=true
+elif [[ -n "$(find "${script_dir}" -type f \( -name '*.go' -o -name 'go.mod' \) -newer "${binary}" -print -quit)" ]]; then
+  needs_build=true
+fi
+
+if [[ "${needs_build}" == true ]]; then
+  go_binary=${GO_BINARY:-$(command -v go || true)}
+  if [[ -z "${go_binary}" || ! -x "${go_binary}" ]]; then
+    print -u2 'agent sidebar: Go is required to build the watcher'
+    exit 1
+  fi
+  if [[ -n "${GOROOT:-}" && ! -d "${GOROOT}" ]]; then
+    unset GOROOT
+  fi
+
+  mkdir -p "${cache_dir}"
+  temporary_binary=${binary}.tmp.$$
+  trap 'rm -f "${temporary_binary:-}"' EXIT
+  (
+    cd "${script_dir}"
+    "${go_binary}" build -trimpath -o "${temporary_binary}" .
+  )
+  mv "${temporary_binary}" "${binary}"
+  trap - EXIT
+fi
+
+exec "${binary}" "$@"

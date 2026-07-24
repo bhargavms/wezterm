@@ -1,9 +1,11 @@
 local wezterm = require 'wezterm'
 local mux = wezterm.mux
 local act = wezterm.action
+local agent_sidebar = require 'agent_sidebar'
 
 local EWA_ROOT = '/Users/mogra/ewa-services'
 local HOME = wezterm.home_dir
+local AGENT_SIDEBAR_RUNNER
 
 -- wezterm.gui is not available to the mux server, so take care to
 -- do something reasonable when this config is evaluated by the mux
@@ -30,6 +32,8 @@ local function join_path(...)
   end
   return path
 end
+
+AGENT_SIDEBAR_RUNNER = join_path(wezterm.config_dir, 'agent-sidebar', 'run')
 
 local function basename(path)
   if not path or path == '' then
@@ -446,6 +450,14 @@ config.keys = {
   { key = '[', mods = 'LEADER', action = switch_relative_workspace_action(-1) },
   { key = ']', mods = 'LEADER', action = switch_relative_workspace_action(1) },
   { key = 'n', mods = 'LEADER', action = spawn_tab_in_current_dir_action() },
+  {
+    key = 'a',
+    mods = 'LEADER',
+    action = agent_sidebar.toggle_action {
+      runner = AGENT_SIDEBAR_RUNNER,
+      cwd_for_pane = pane_current_dir,
+    },
+  },
   { key = '|', mods = 'LEADER|SHIFT', action = split_in_current_dir_action 'horizontal' },
   { key = '\\', mods = 'LEADER', action = split_in_current_dir_action 'horizontal' },
   { key = '-', mods = 'LEADER', action = split_in_current_dir_action 'vertical' },
