@@ -2,9 +2,7 @@ package main
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/mattn/go-runewidth"
 )
@@ -19,37 +17,21 @@ const (
 )
 
 type renderOptions struct {
-	RepoRoot string
-	Width    int
-	Now      time.Time
-	Plain    bool
-	Err      error
+	Scope string
+	Width int
+	Plain bool
+	Err   error
 }
 
-func renderSidebar(agents []agent, options renderOptions) string {
+func renderSidebar(sessions []codexSession, options renderOptions) string {
 	width := max(20, options.Width)
 	var output strings.Builder
 
-	repository := sanitizeLabel(filepath.Base(options.RepoRoot))
-	active := 0
-	stale := 0
-	recent := 0
-	for _, current := range agents {
-		switch current.Status {
-		case statusDone:
-			recent++
-		case statusStale:
-			stale++
-		default:
-			active++
-		}
-	}
-
 	output.WriteString(style("AGENTS", ansiBold+ansiCyan, options.Plain))
 	output.WriteString(" · ")
-	output.WriteString(truncate(repository, width-9))
+	output.WriteString(truncate(sanitizeLabel(options.Scope), width-9))
 	output.WriteByte('\n')
-	for _, line := range wrap(fmt.Sprintf("%d active · %d stale · %d recent", active, stale, recent), width, 2) {
+	for _, line := range wrap(fmt.Sprintf("%d active", len(sessions)), width, 2) {
 		output.WriteString(line)
 		output.WriteByte('\n')
 	}
@@ -60,17 +42,14 @@ func renderSidebar(agents []agent, options renderOptions) string {
 		output.WriteString("\n\n")
 	}
 
-	if len(agents) == 0 {
-		output.WriteString("No active subagents.\n\n")
-		for _, line := range wrap("Ask Codex to delegate work.", width, 2) {
-			output.WriteString(style(line+"\n", ansiDim, options.Plain))
-		}
-		for _, line := range wrap("Use /agent to inspect threads.", width, 2) {
+	if len(sessions) == 0 {
+		output.WriteString("No Codex sessions in this window.\n\n")
+		for _, line := range wrap("Open a tab and start Codex.", width, 2) {
 			output.WriteString(style(line+"\n", ansiDim, options.Plain))
 		}
 	} else {
-		for _, current := range agents {
-			output.WriteString(renderAgent(current, width, options))
+		for _, session := range sessions {
+			output.WriteString(renderSession(session, width, options))
 		}
 	}
 
@@ -80,45 +59,18 @@ func renderSidebar(agents []agent, options renderOptions) string {
 	return output.String()
 }
 
-func renderAgent(current agent, width int, options renderOptions) string {
+func renderSession(session codexSession, width int, options renderOptions) string {
 	var output strings.Builder
-	marker := "●"
-	markerStyle := ansiGreen
-	if current.Status == statusStale {
-		marker = "!"
-		markerStyle = ansiYellow
-	} else if current.Status == statusDone {
-		marker = "✓"
-		markerStyle = ansiDim
-	}
+	label := sanitizeLabel(session.Tab) + " · " + sanitizeLabel(session.Repository)
 
-	ageFrom := current.UpdatedAt
-	if current.Status == statusDone {
-		ageFrom = current.CompletedAt
-	}
-	age := relativeAge(options.Now, ageFrom)
-
-	label := sanitizeLabel(current.Name)
-	nickname := sanitizeLabel(current.Nickname)
-	if nickname != "" && !strings.EqualFold(label, nickname) {
-		label += " · " + nickname
-	}
-	labelWidth := max(4, width-runewidth.StringWidth(age)-4)
-
-	output.WriteString(style(marker, markerStyle, options.Plain))
+	output.WriteString(style("●", ansiGreen, options.Plain))
 	output.WriteByte(' ')
-	output.WriteString(style(truncate(label, labelWidth), ansiBold, options.Plain))
-	output.WriteByte(' ')
-	output.WriteString(style(age, ansiDim, options.Plain))
+	output.WriteString(style(truncate(label, width-2), ansiBold, options.Plain))
 	output.WriteByte('\n')
 
-	summary := current.Summary
+	summary := session.Summary
 	if summary == "" {
-		if current.Status == statusDone {
-			summary = "Completed"
-		} else {
-			summary = "Starting…"
-		}
+		summary = "Codex is running"
 	}
 	for _, line := range wrap(summary, max(8, width-2), 2) {
 		output.WriteString("  ")
@@ -179,24 +131,4 @@ func wrap(value string, width, maxLines int) []string {
 		lines = append(lines, current)
 	}
 	return lines
-}
-
-func relativeAge(now, then time.Time) string {
-	if then.IsZero() {
-		return "now"
-	}
-	elapsed := now.Sub(then)
-	if elapsed < 0 {
-		elapsed = 0
-	}
-	switch {
-	case elapsed < time.Minute:
-		return "now"
-	case elapsed < time.Hour:
-		return fmt.Sprintf("%dm", int(elapsed.Minutes()))
-	case elapsed < 24*time.Hour:
-		return fmt.Sprintf("%dh", int(elapsed.Hours()))
-	default:
-		return fmt.Sprintf("%dd", int(elapsed.Hours()/24))
-	}
 }

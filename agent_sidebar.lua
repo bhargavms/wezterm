@@ -58,8 +58,6 @@ function M.toggle_action(options)
         cwd = cwd,
         args = {
           options.runner,
-          '--cwd',
-          cwd,
           '--width',
           tostring(math.max(20, width - 2)),
         },
@@ -72,7 +70,7 @@ function M.toggle_action(options)
     end
 
     sidebar:inject_output(SIDEBAR_MARKER .. SIDEBAR_TITLE)
-    pane:activate()
+    sidebar:activate()
   end)
 end
 

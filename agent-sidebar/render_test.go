@@ -3,47 +3,28 @@ package main
 import (
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/mattn/go-runewidth"
 )
 
-func TestRenderSidebarShowsStatusSummaryAndNoANSIInPlainMode(t *testing.T) {
-	now := time.Now().UTC()
-	output := renderSidebar([]agent{
+func TestRenderSidebarShowsSessionsAndNoANSIInPlainMode(t *testing.T) {
+	output := renderSidebar([]codexSession{
 		{
-			Name:      "review authentication",
-			Nickname:  "Dalton",
-			Summary:   "Tracing the authentication boundary and its focused unit tests",
-			Status:    statusRunning,
-			UpdatedAt: now.Add(-2 * time.Minute),
-		},
-		{
-			Name:      "stale worker",
-			Summary:   "Waiting for another update",
-			Status:    statusStale,
-			UpdatedAt: now.Add(-31 * time.Minute),
-		},
-		{
-			Name:        "documentation",
-			Summary:     "Completed",
-			Status:      statusDone,
-			CompletedAt: now.Add(-time.Minute),
+			Repository: "review-authentication",
+			Tab:        "tab 3",
+			Summary:    "Tracing the authentication boundary and its focused unit tests",
 		},
 	}, renderOptions{
-		RepoRoot: "/tmp/example-repository",
-		Width:    36,
-		Now:      now,
-		Plain:    true,
+		Scope: "this window",
+		Width: 36,
+		Plain: true,
 	})
 
 	for _, expected := range []string{
-		"AGENTS · example-repository",
-		"1 active · 1 stale · 1 recent",
-		"● review authentication · Dalton 2m",
+		"AGENTS · this window",
+		"1 active",
+		"● tab 3 · review-authentication",
 		"Tracing the authentication",
-		"! stale worker 31m",
-		"✓ documentation 1m",
 		"q close   r refresh",
 	} {
 		if !strings.Contains(output, expected) {
@@ -62,17 +43,14 @@ func TestRenderSidebarShowsStatusSummaryAndNoANSIInPlainMode(t *testing.T) {
 }
 
 func TestRenderSidebarRespectsTerminalCellWidth(t *testing.T) {
-	now := time.Now().UTC()
-	output := renderSidebar([]agent{{
-		Name:      "設計レビュー 🧭",
-		Summary:   "認証フローを確認しています 🚀",
-		Status:    statusRunning,
-		UpdatedAt: now,
+	output := renderSidebar([]codexSession{{
+		Repository: "設計レビュー 🧭",
+		Tab:        "tab 8",
+		Summary:    "認証フローを確認しています 🚀",
 	}}, renderOptions{
-		RepoRoot: "/tmp/日本語-project",
-		Width:    24,
-		Now:      now,
-		Plain:    true,
+		Scope: "this window",
+		Width: 24,
+		Plain: true,
 	})
 
 	for _, line := range strings.Split(output, "\n") {
@@ -83,19 +61,15 @@ func TestRenderSidebarRespectsTerminalCellWidth(t *testing.T) {
 }
 
 func TestRenderSidebarStripsControlSequencesFromLabels(t *testing.T) {
-	now := time.Now().UTC()
-	output := renderSidebar([]agent{{
-		Name:      "review\x1b]2;owned\a",
-		Nickname:  "helper\x1b[31m",
-		Summary:   "Safe summary",
-		Status:    statusRunning,
-		UpdatedAt: now,
+	output := renderSidebar([]codexSession{{
+		Repository: "review\x1b]2;owned\a",
+		Tab:        "tab 1\x1b[31m",
+		Summary:    "Safe summary",
 	}}, renderOptions{
-		RepoRoot: "/tmp/project\x1b]2;owned\a",
-		Width:    42,
-		Now:      now,
-		Plain:    true,
-		Err:      errTest("bad\x1b[31m"),
+		Scope: "this window\x1b]2;owned\a",
+		Width: 42,
+		Plain: true,
+		Err:   errTest("bad\x1b[31m"),
 	})
 
 	if strings.ContainsAny(output, "\x1b\a") {
@@ -105,21 +79,36 @@ func TestRenderSidebarStripsControlSequencesFromLabels(t *testing.T) {
 
 func TestRenderSidebarExplainsEmptyStateAndErrors(t *testing.T) {
 	output := renderSidebar(nil, renderOptions{
-		RepoRoot: "/tmp/project",
-		Width:    42,
-		Now:      time.Now(),
-		Plain:    true,
-		Err:      errTest("session directory unavailable"),
+		Scope: "this window",
+		Width: 42,
+		Plain: true,
+		Err:   errTest("pane list unavailable"),
 	})
 
 	for _, expected := range []string{
-		"session directory unavailable",
-		"No active subagents.",
-		"Use /agent to inspect threads.",
+		"pane list unavailable",
+		"No Codex sessions in this window.",
+		"Open a tab and start Codex.",
 	} {
 		if !strings.Contains(output, expected) {
 			t.Errorf("output does not contain %q:\n%s", expected, output)
 		}
+	}
+}
+
+func TestRenderSidebarKeepsTabVisibleForLongRepositoryNames(t *testing.T) {
+	output := renderSidebar([]codexSession{{
+		Repository: "growthbook-experiment-tracker",
+		Tab:        "tab 12",
+		Summary:    "Reviewing the rollout",
+	}}, renderOptions{
+		Scope: "this window",
+		Width: 30,
+		Plain: true,
+	})
+
+	if !strings.Contains(output, "● tab 12 · growthbook") {
+		t.Fatalf("tab position or repository prefix disappeared:\n%s", output)
 	}
 }
 

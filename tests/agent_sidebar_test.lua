@@ -75,12 +75,16 @@ end
 
 do
   local injected
-  local activated = false
+  local original_activated = false
+  local sidebar_activated = false
   local split_spec
 
   local sidebar = {}
   function sidebar:inject_output(value)
     injected = value
+  end
+  function sidebar:activate()
+    sidebar_activated = true
   end
 
   local tab = {}
@@ -100,7 +104,7 @@ do
     return sidebar
   end
   function pane:activate()
-    activated = true
+    original_activated = true
   end
 
   toggle(make_window(), pane)
@@ -110,13 +114,12 @@ do
   assert_equal(split_spec.size, 36, 'split width')
   assert_equal(split_spec.cwd, '/tmp/project', 'split cwd')
   assert_equal(split_spec.args[1], runner, 'runner command')
-  assert_equal(split_spec.args[2], '--cwd', 'cwd flag')
-  assert_equal(split_spec.args[3], '/tmp/project', 'cwd argument')
-  assert_equal(split_spec.args[4], '--width', 'width flag')
-  assert_equal(split_spec.args[5], '34', 'width argument')
+  assert_equal(split_spec.args[2], '--width', 'width flag')
+  assert_equal(split_spec.args[3], '34', 'width argument')
   assert(injected:find('CODEX_AGENT_SIDEBAR', 1, true), 'sidebar marker was not injected')
   assert(injected:find('Agents', 1, true), 'sidebar title was not injected')
-  assert_equal(activated, true, 'original pane activation')
+  assert_equal(sidebar_activated, true, 'sidebar pane activation')
+  assert_equal(original_activated, false, 'original pane activation')
 end
 
 print 'agent_sidebar_test: ok'

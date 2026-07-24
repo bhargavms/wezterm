@@ -8,22 +8,24 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 )
 
 type appConfig struct {
-	cwd           string
-	sessionsDir   string
-	width         int
-	refreshEvery  time.Duration
-	discoverEvery time.Duration
-	doneFor       time.Duration
-	staleAfter    time.Duration
-	scanWindow    time.Duration
-	once          bool
-	plain         bool
+	wezterm      string
+	paneID       int
+	width        int
+	refreshEvery time.Duration
+	once         bool
+	plain        bool
+}
+
+type refreshResult struct {
+	sessions []codexSession
+	err      error
 }
 
 func main() {
@@ -33,24 +35,19 @@ func main() {
 		os.Exit(2)
 	}
 
-	repoRoot := findRepositoryRoot(config.cwd)
-	collector := newCollector(collectorOptions{
-		SessionsDir:   config.sessionsDir,
-		RepoRoot:      repoRoot,
-		DoneFor:       config.doneFor,
-		StaleAfter:    config.staleAfter,
-		ScanWindow:    config.scanWindow,
-		DiscoverEvery: config.discoverEvery,
+	collector := newWindowCollector(windowCollectorOptions{
+		Execute:       executeCommand,
+		WezTerm:       config.wezterm,
+		SidebarPaneID: config.paneID,
 	})
 
 	if config.once {
-		agents, refreshErr := collector.refresh()
-		fmt.Print(renderSidebar(agents, renderOptions{
-			RepoRoot: repoRoot,
-			Width:    config.width,
-			Now:      time.Now(),
-			Plain:    config.plain,
-			Err:      refreshErr,
+		sessions, refreshErr := collector.refresh(context.Background())
+		fmt.Print(renderSidebar(sessions, renderOptions{
+			Scope: "this window",
+			Width: config.width,
+			Plain: config.plain,
+			Err:   refreshErr,
 		}))
 		if refreshErr != nil {
 			os.Exit(1)
@@ -58,59 +55,55 @@ func main() {
 		return
 	}
 
-	runInteractive(config, repoRoot, collector)
+	runInteractive(config, collector)
 }
 
 func parseFlags() (appConfig, error) {
 	var config appConfig
-	defaultCWD, err := os.Getwd()
+	defaultPaneID, err := environmentPaneID()
 	if err != nil {
 		return config, err
 	}
 
-	defaultSessionsDir, err := codexSessionsDir()
-	if err != nil {
-		return config, err
-	}
-
-	flag.StringVar(&config.cwd, "cwd", defaultCWD, "working directory used to select the repository")
-	flag.StringVar(&config.sessionsDir, "sessions-dir", defaultSessionsDir, "Codex sessions directory")
+	flag.StringVar(&config.wezterm, "wezterm", weztermExecutable(), "WezTerm CLI executable")
+	flag.IntVar(&config.paneID, "pane-id", defaultPaneID, "sidebar pane id used to select the current window")
 	flag.IntVar(&config.width, "width", 42, "render width in terminal cells")
-	flag.DurationVar(&config.refreshEvery, "refresh", time.Second, "agent refresh interval")
-	flag.DurationVar(&config.discoverEvery, "discover-every", 5*time.Second, "session discovery interval")
-	flag.DurationVar(&config.doneFor, "done-for", 10*time.Minute, "how long completed agents remain visible")
-	flag.DurationVar(&config.staleAfter, "stale-after", 30*time.Minute, "when an unfinished agent is marked stale")
-	flag.DurationVar(&config.scanWindow, "scan-window", 48*time.Hour, "age window for discovering session files")
+	flag.DurationVar(&config.refreshEvery, "refresh", 2*time.Second, "window refresh interval")
 	flag.BoolVar(&config.once, "once", false, "render once and exit")
 	flag.BoolVar(&config.plain, "plain", false, "disable ANSI styling")
 	flag.Parse()
 
-	absoluteCWD, err := filepath.Abs(config.cwd)
-	if err != nil {
-		return config, err
-	}
-	config.cwd = filepath.Clean(absoluteCWD)
 	config.width = max(20, config.width)
 	if config.refreshEvery <= 0 {
 		return config, fmt.Errorf("refresh must be positive")
-	}
-	if config.discoverEvery <= 0 {
-		return config, fmt.Errorf("discover-every must be positive")
 	}
 
 	return config, nil
 }
 
-func codexSessionsDir() (string, error) {
-	if codexHome := os.Getenv("CODEX_HOME"); codexHome != "" {
-		return filepath.Join(codexHome, "sessions"), nil
+func environmentPaneID() (int, error) {
+	value := os.Getenv("WEZTERM_PANE")
+	if value == "" {
+		return -1, nil
 	}
-
-	home, err := os.UserHomeDir()
+	paneID, err := strconv.Atoi(value)
 	if err != nil {
-		return "", err
+		return -1, fmt.Errorf("invalid WEZTERM_PANE %q", value)
 	}
-	return filepath.Join(home, ".codex", "sessions"), nil
+	return paneID, nil
+}
+
+func weztermExecutable() string {
+	if directory := os.Getenv("WEZTERM_EXECUTABLE_DIR"); directory != "" {
+		candidate := filepath.Join(directory, "wezterm")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	if executable, err := exec.LookPath("wezterm"); err == nil {
+		return executable
+	}
+	return "/Applications/WezTerm.app/Contents/MacOS/wezterm"
 }
 
 func findRepositoryRoot(start string) string {
@@ -147,7 +140,7 @@ func canonicalPath(path string) string {
 	return cleaned
 }
 
-func runInteractive(config appConfig, repoRoot string, collector *collector) {
+func runInteractive(config appConfig, collector *windowCollector) {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer cancel()
 
@@ -160,8 +153,22 @@ func runInteractive(config appConfig, repoRoot string, collector *collector) {
 	input := make(chan byte, 1)
 	go readInput(input)
 
-	refresh := make(chan struct{}, 1)
-	refresh <- struct{}{}
+	results := make(chan refreshResult, 1)
+	refreshing := false
+	requestRefresh := func() {
+		if refreshing {
+			return
+		}
+		refreshing = true
+		go func() {
+			sessions, err := collector.refresh(ctx)
+			select {
+			case results <- refreshResult{sessions: sessions, err: err}:
+			case <-ctx.Done():
+			}
+		}()
+	}
+	requestRefresh()
 	ticker := time.NewTicker(config.refreshEvery)
 	defer ticker.Stop()
 
@@ -179,30 +186,19 @@ func runInteractive(config appConfig, repoRoot string, collector *collector) {
 			case 'q', 3, 27:
 				return
 			case 'r':
-				collector.forceDiscovery()
-				select {
-				case refresh <- struct{}{}:
-				default:
-				}
+				requestRefresh()
 			}
 		case <-ticker.C:
-			select {
-			case refresh <- struct{}{}:
-			default:
-			}
+			requestRefresh()
 		case <-resize:
 			width = terminalWidth(config.width)
-			select {
-			case refresh <- struct{}{}:
-			default:
-			}
-		case <-refresh:
-			agents, err := collector.refresh()
-			output := renderSidebar(agents, renderOptions{
-				RepoRoot: repoRoot,
-				Width:    width,
-				Now:      time.Now(),
-				Err:      err,
+			requestRefresh()
+		case result := <-results:
+			refreshing = false
+			output := renderSidebar(result.sessions, renderOptions{
+				Scope: "this window",
+				Width: width,
+				Err:   result.err,
 			})
 			fmt.Print("\x1b[H\x1b[2J" + output)
 		}
